@@ -136,8 +136,6 @@ export default function SearchPapers() {
         <span className="text-xs text-gray-500">Source:</span>
         <select value={source} onChange={(e) => setSource(e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-xs min-w-32">
           <option value="all">Unified Search (All)</option>
-          <option value="ieee">IEEE Xplore (Specialized)</option>
-          <option value="openalex">OpenAlex (250M+ Global Papers)</option>
           <option value="semanticscholar">Semantic Scholar (IEEE, Nature, etc.)</option>
           <option value="arxiv">arXiv preprint server</option>
           <option value="huggingface">Hugging Face Daily</option>
