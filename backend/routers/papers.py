@@ -177,6 +177,111 @@ async def query_huggingface(query: str, max_results: int = 10):
             return []
 
 
+# --- OpenAlex Global Catalog Search ---
+async def query_openalex(query: str, max_results: int = 10):
+    url = "https://api.openalex.org/works"
+    params = {
+        "search": query,
+        "per-page": max_results,
+        "mailto": "researchhub-admin@example.com", # Polite pool usage
+        "sort": "relevance_score:desc"
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        try:
+            response = await client.get(url, params=params)
+            if response.status_code != 200:
+                return []
+                
+            data = response.json()
+            papers = []
+            
+            for item in data.get("results", []):
+                authors = [a.get("author", {}).get("display_name", "") for a in item.get("authorships", [])]
+                
+                # OpenAlex abstract comes as an inverted index to save space, needs reconstruction
+                abstract_inv = item.get("abstract_inverted_index", {})
+                abstract = "No abstract available."
+                if abstract_inv:
+                    words = []
+                    for word, positions in abstract_inv.items():
+                        for pos in positions:
+                            words.append((pos, word))
+                    words.sort(key=lambda x: x[0])
+                    abstract = " ".join([w[1] for w in words])
+                
+                pdf_link = ""
+                open_access = item.get("open_access", {})
+                if open_access and open_access.get("is_oa"):
+                    pdf_link = open_access.get("oa_url", "")
+                    
+                papers.append({
+                    "arxiv_id": str(item.get("id", "")).split("/")[-1],
+                    "title": item.get("title", "N/A") or "N/A",
+                    "authors": ", ".join(auth for auth in authors if auth),
+                    "abstract": abstract.strip() or "No abstract available.",
+                    "published": str(item.get("publication_year", "")),
+                    "source": "openalex",
+                    "pdf_url": pdf_link or item.get("id", ""),
+                    "citations": item.get("cited_by_count", 0)
+                })
+            return papers
+        except Exception as e:
+            print(f"OpenAlex Exception: {e}")
+            return []
+
+
+
+# --- IEEE Search (via Semantic Scholar) ---
+async def query_ieee(query: str, max_results: int = 10):
+    # Prioritizing IEEE papers by leveraging Semantic Scholar's venue indexing
+    url = "https://api.semanticscholar.org/graph/v1/paper/search"
+    params = {
+        "query": f"{query} IEEE",
+        "limit": max_results * 2, # Overfetch to ensure we get exactly IEEE
+        "fields": "paperId,title,authors,abstract,year,url,citationCount,isOpenAccess,openAccessPdf,venue"
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        try:
+            response = await client.get(url, params=params)
+            if response.status_code != 200:
+                return []
+                
+            data = response.json()
+            papers = []
+            
+            for item in data.get("data", []):
+                venue = str(item.get("venue", "")).upper()
+                title = str(item.get("title", "")).upper()
+                
+                # Check if it was published in an IEEE venue or conference
+                if "IEEE" in venue or "IEEE" in title:
+                    authors = [a.get("name", "") for a in item.get("authors", [])]
+                    
+                    pdf_link = ""
+                    if item.get("isOpenAccess") and item.get("openAccessPdf"):
+                        pdf_link = item.get("openAccessPdf", {}).get("url", "")
+                        
+                    papers.append({
+                        "arxiv_id": item.get("paperId", ""), 
+                        "title": item.get("title", "N/A"),
+                        "authors": ", ".join(authors),
+                        "abstract": item.get("abstract") or "No abstract available.",
+                        "published": str(item.get("year", "")),
+                        "source": "ieee",
+                        "pdf_url": pdf_link or item.get("url", ""),
+                        "citations": item.get("citationCount", 0)
+                    })
+                    
+                    if len(papers) >= max_results:
+                        break
+            return papers
+        except Exception as e:
+            print(f"IEEE Exception: {e}")
+            return []
+
+
 
 # --- Endpoints ---
 @router.get("/search")
@@ -193,6 +298,10 @@ async def search_papers(
         tasks.append(query_semantic_scholar(query, max_results=10))
     if source in ["all", "huggingface"]:
         tasks.append(query_huggingface(query, max_results=10))
+    if source in ["all", "openalex"]:
+        tasks.append(query_openalex(query, max_results=10))
+    if source in ["all", "ieee"]:
+        tasks.append(query_ieee(query, max_results=10))
         
     results = await asyncio.gather(*tasks)
     
